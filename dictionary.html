@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>A.Kamus</title>
+</head>
+<body>
+  <h2>A.Kamus</h2>
+
+  <form id="wordForm">
+    <label>Word: <input type="text" id="word" required></label><br><br>
+    <label>Meaning: <input type="text" id="meaning" required></label><br><br>
+    <button type="submit">Submit</button>
+  </form>
+
+  <p id="message"></p>
+
+  <button id="exportBtn">Export JSON</button>
+  <input type="file" id="importFile" accept=".json" style="display:none">
+  <button id="importBtn">Import JSON</button>
+
+  <br><br>
+  <label>Search: <input type="text" id="searchInput" placeholder="Filter by word or meaning"></label>
+
+  <br><br>
+  <label>Sort by:
+    <select id="sortSelect">
+      <option value="name">Name (A-Z)</option>
+      <option value="date">Date (Latest first)</option>
+    </select>
+  </label>
+
+  <h3>Stored Words</h3>
+  <div id="wordList"></div>
+
+  <script>
+    function getDictionary() {
+      let dict = localStorage.getItem("wordDictionary");
+      return dict ? JSON.parse(dict) : {};
+    }
+
+    function saveDictionary(dict) {
+      localStorage.setItem("wordDictionary", JSON.stringify(dict));
+    }
+
+    function getNextId() {
+      return parseInt(localStorage.getItem("nextId") || "1", 10);
+    }
+
+    function saveNextId(id) {
+      localStorage.setItem("nextId", id.toString());
+    }
+
+    // Backfill IDs for entries that don't have one
+    function backfillIds() {
+      let dict = getDictionary();
+      let nextId = getNextId();
+      let changed = false;
+      for (let word in dict) {
+        if (!dict[word].id) {
+          dict[word].id = nextId++;
+          changed = true;
+        }
+      }
+      if (changed) {
+        saveDictionary(dict);
+        saveNextId(nextId);
+      }
+    }
+
+    function renderList() {
+      let dict = getDictionary();
+      let sortMode = document.getElementById("sortSelect").value;
+      let searchTerm = document.getElementById("searchInput").value.trim().toLowerCase();
+      let entries = Object.entries(dict); // [ [word, {meaning, date}], ... ]
+
+      // Filter by search term
+      if (searchTerm) {
+        entries = entries.filter(([word, data]) =>
+          word.toLowerCase().includes(searchTerm) ||
+          data.meaning.toLowerCase().includes(searchTerm)
+        );
+      }
+
+      if (sortMode === "name") {
+        entries.sort((a, b) => a[0].localeCompare(b[0])); // A-Z
+      } else if (sortMode === "date") {
+        entries.sort((a, b) => new Date(b[1].date) - new Date(a[1].date)); // Latest first
+      }
+
+      let list = document.getElementById("wordList");
+      list.innerHTML = "";
+      for (let [word, data] of entries) {
+        let div = document.createElement("div");
+        let day = new Date(data.date).toLocaleDateString('en-US', { weekday: 'short' });
+        div.textContent = data.id + ". " + word + " (" + data.meaning + ") — added on " + day + ", " + data.date + " ";
+        
+        // Edit button
+        let editBtn = document.createElement("button");
+        editBtn.textContent = "Edit";
+        editBtn.onclick = function() {
+          let newMeaning = prompt("Edit meaning for '" + word + "':", data.meaning);
+          if (newMeaning !== null && newMeaning.trim() !== "") {
+            dict[word].meaning = newMeaning.trim();
+            saveDictionary(dict);
+            renderList();
+          }
+        };
+        div.appendChild(editBtn);
+        
+        // Delete button
+        let deleteBtn = document.createElement("button");
+        deleteBtn.textContent = "Delete";
+        deleteBtn.onclick = function() {
+          if (confirm("Delete '" + word + "'?")) {
+            delete dict[word];
+            saveDictionary(dict);
+            renderList();
+          }
+        };
+        div.appendChild(deleteBtn);
+        
+        list.appendChild(div);
+      }
+    }
+
+    // Handle form submission
+    document.getElementById("wordForm").addEventListener("submit", function(e) {
+      e.preventDefault();
+      let word = document.getElementById("word").value.trim();
+      let meaning = document.getElementById("meaning").value.trim();
+      let dict = getDictionary();
+      let normalizedWord = word.toLowerCase();
+      let normalizedMeaning = meaning.toLowerCase();
+
+      // Check for duplicate word+meaning pair
+      let duplicate = Object.entries(dict).find(([existingWord, data]) =>
+        existingWord.toLowerCase() === normalizedWord &&
+        data.meaning.toLowerCase() === normalizedMeaning
+      );
+
+      if (duplicate) {
+        let [dupWord, dupData] = duplicate;
+        document.getElementById("message").textContent =
+          "Duplicate: '" + dupWord + "' with meaning '" + dupData.meaning +
+          "' already exists (added on " + dupData.date + ").";
+      } else {
+        // Check if word exists with different meaning
+        if (dict[word]) {
+          document.getElementById("message").textContent =
+            "Note: '" + word + "' already exists with meaning '" +
+            dict[word].meaning + "'. Adding new meaning.";
+        }
+        let now = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+        let id = getNextId();
+        dict[word] = { id: id, meaning: meaning, date: now };
+        saveNextId(id + 1);
+        saveDictionary(dict);
+        document.getElementById("message").textContent =
+          "Stored: " + word + " = " + meaning + " on " + now + ".";
+      }
+      renderList();
+    });
+
+    // Export dictionary
+    document.getElementById("exportBtn").addEventListener("click", function() {
+      let dict = getDictionary();
+      let blob = new Blob([JSON.stringify(dict, null, 2)], { type: "application/json" });
+      let url = URL.createObjectURL(blob);
+      let a = document.createElement("a");
+      a.href = url;
+      a.download = "dictionary.json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+
+    // Import dictionary
+    document.getElementById("importBtn").addEventListener("click", function() {
+      document.getElementById("importFile").click();
+    });
+
+    document.getElementById("importFile").addEventListener("change", function(e) {
+      let file = e.target.files[0];
+      if (!file) return;
+      let reader = new FileReader();
+      reader.onload = function(event) {
+        try {
+          let imported = JSON.parse(event.target.result);
+          let dict = getDictionary();
+          let added = 0;
+          let skipped = 0;
+          
+          for (let [word, data] of Object.entries(imported)) {
+            // Check if word+meaning pair already exists (case-normalized)
+            let normalizedWord = word.toLowerCase().trim();
+            let normalizedMeaning = data.meaning.toLowerCase().trim();
+            
+            let exists = Object.entries(dict).some(([existingWord, existingData]) =>
+              existingWord.toLowerCase().trim() === normalizedWord &&
+              existingData.meaning.toLowerCase().trim() === normalizedMeaning
+            );
+            
+            if (!exists) {
+              let id = getNextId();
+              dict[word] = { id: id, meaning: data.meaning, date: data.date };
+              saveNextId(id + 1);
+              added++;
+            } else {
+              skipped++;
+            }
+          }
+          
+          saveDictionary(dict);
+          document.getElementById("message").textContent =
+            "Import complete: " + added + " added, " + skipped + " skipped (duplicates).";
+          renderList();
+        } catch (err) {
+          document.getElementById("message").textContent = "Error: Invalid JSON file.";
+        }
+      };
+      reader.readAsText(file);
+    });
+
+    // Handle sorting
+    document.getElementById("sortSelect").addEventListener("change", renderList);
+
+    // Handle search
+    document.getElementById("searchInput").addEventListener("input", renderList);
+
+    // Backfill IDs for existing entries
+    backfillIds();
+
+    // Render list on load
+    renderList();
+  </script>
+</body>
+</html>
